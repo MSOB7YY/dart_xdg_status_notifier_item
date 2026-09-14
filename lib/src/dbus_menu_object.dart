@@ -106,6 +106,9 @@ class DBusMenuObject extends DBusObject {
 
   String _status = 'normal';
 
+  // Layout revision, hosts only re-fetch the layout when this increases.
+  int _revision = 1;
+
   final _items = <DBusMenuItem>[];
   final _idsByItem = <DBusMenuItem, int>{};
 
@@ -151,9 +154,14 @@ class DBusMenuObject extends DBusObject {
     ]);
 
     // Emit LayoutUpdated since the underlying tree structure might have fundamentally changed.
+    await _emitLayoutUpdated(0);
+  }
+
+  Future<void> _emitLayoutUpdated(int parentId) async {
+    _revision++;
     await emitSignal('com.canonical.dbusmenu', 'LayoutUpdated', [
-      DBusUint32(1), // revision
-      DBusInt32(0), // parent id (root)
+      DBusUint32(_revision),
+      DBusInt32(parentId),
     ]);
   }
 
@@ -312,6 +320,26 @@ class DBusMenuObject extends DBusObject {
             ],
           ),
           DBusIntrospectMethod(
+            'GetGroupProperties',
+            args: [
+              DBusIntrospectArgument(
+                DBusSignature('ai'),
+                DBusArgumentDirection.in_,
+                name: 'ids',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('as'),
+                DBusArgumentDirection.in_,
+                name: 'propertyNames',
+              ),
+              DBusIntrospectArgument(
+                DBusSignature('a(ia{sv})'),
+                DBusArgumentDirection.out,
+                name: 'properties',
+              ),
+            ],
+          ),
+          DBusIntrospectMethod(
             'GetProperty',
             args: [
               DBusIntrospectArgument(
@@ -453,6 +481,8 @@ class DBusMenuObject extends DBusObject {
         return _handleEventGroupMethod(methodCall);
       case 'GetLayout':
         return _handleGetLayoutMethod(methodCall);
+      case 'GetGroupProperties':
+        return _handleGetGroupPropertiesMethod(methodCall);
       case 'GetProperty':
         return _handleGetPropertyMethod(methodCall);
       default:
@@ -474,10 +504,7 @@ class DBusMenuObject extends DBusObject {
     var needsUpdate = await item.onAboutToShow?.call() ?? false;
     if (needsUpdate) {
       // We signal the layout update to allow the host to re-read the layout.
-      await emitSignal('com.canonical.dbusmenu', 'LayoutUpdated', [
-        DBusUint32(1), // revision
-        DBusInt32(id), // parent id
-      ]);
+      await _emitLayoutUpdated(id);
     }
     return DBusMethodSuccessResponse([DBusBoolean(needsUpdate)]);
   }
@@ -500,10 +527,7 @@ class DBusMenuObject extends DBusObject {
           var needsUpdate = await item.onAboutToShow?.call() ?? false;
           if (needsUpdate) {
             updatesNeeded.add(id);
-            await emitSignal('com.canonical.dbusmenu', 'LayoutUpdated', [
-              DBusUint32(1), // revision
-              DBusInt32(id), // parent id
-            ]);
+            await _emitLayoutUpdated(id);
           }
         }
       }),
@@ -564,14 +588,41 @@ class DBusMenuObject extends DBusObject {
     }
     var parentId = methodCall.values[0].asInt32();
     var recursionDepth = methodCall.values[1].asInt32();
+    var propertyNames = methodCall.values[2].asStringArray().toList();
     var item = _getItem(parentId);
     if (item == null) {
       return DBusMethodErrorResponse('com.canonical.dbusmenu.UnknownId');
     }
-    var revision = 1;
     return DBusMethodSuccessResponse([
-      DBusUint32(revision),
-      _makeMenuItem(item, recursionDepth),
+      DBusUint32(_revision),
+      _makeMenuItem(item, recursionDepth, propertyNames),
+    ]);
+  }
+
+  // Required by libdbusmenu based hosts (Cinnamon, XFCE, MATE), which ignore the properties sent in GetLayout.
+  Future<DBusMethodResponse> _handleGetGroupPropertiesMethod(
+    DBusMethodCall methodCall,
+  ) async {
+    if (methodCall.signature != DBusSignature('aias')) {
+      return DBusMethodErrorResponse.invalidArgs();
+    }
+    var ids = methodCall.values[0].asInt32Array();
+    var propertyNames = methodCall.values[1].asStringArray().toList();
+    var items = ids.isEmpty
+        ? _items
+        : ids.map(_getItem).whereType<DBusMenuItem>();
+    return DBusMethodSuccessResponse([
+      DBusArray(
+        DBusSignature('(ia{sv})'),
+        items.map(
+          (item) => DBusStruct([
+            DBusInt32(_idsByItem[item]!),
+            DBusDict.stringVariant(
+              _makeFilteredMenuItemProperties(item, propertyNames),
+            ),
+          ]),
+        ),
+      ),
     ]);
   }
 
@@ -639,6 +690,18 @@ class DBusMenuObject extends DBusObject {
     return properties;
   }
 
+  // Build properties on menu items, limited to [propertyNames] unless it's empty.
+  Map<String, DBusValue> _makeFilteredMenuItemProperties(
+    DBusMenuItem item,
+    List<String> propertyNames,
+  ) {
+    var properties = _makeMenuItemProperties(item);
+    if (propertyNames.isNotEmpty) {
+      properties.removeWhere((name, _) => !propertyNames.contains(name));
+    }
+    return properties;
+  }
+
   // Returns properties in [newProperties] that are new or have changed values from [originalProperties].
   static Map<String, DBusValue> _getUpdatedProperties(
     Map<String, DBusValue> originalProperties,
@@ -664,18 +727,24 @@ class DBusMenuObject extends DBusObject {
   }
 
   // Build description of menu items.
-  DBusValue _makeMenuItem(DBusMenuItem item, int recursionDepth) {
+  DBusValue _makeMenuItem(
+    DBusMenuItem item,
+    int recursionDepth,
+    List<String> propertyNames,
+  ) {
     List<DBusValue> children = [];
     if (recursionDepth != 0) {
       var nextRecursionDepth =
           recursionDepth < 0 ? recursionDepth : recursionDepth - 1;
       for (var child in item.children) {
-        children.add(_makeMenuItem(child, nextRecursionDepth));
+        children.add(_makeMenuItem(child, nextRecursionDepth, propertyNames));
       }
     }
     return DBusStruct([
       DBusInt32(_idsByItem[item] ?? -1),
-      DBusDict.stringVariant(_makeMenuItemProperties(item)),
+      DBusDict.stringVariant(
+        _makeFilteredMenuItemProperties(item, propertyNames),
+      ),
       DBusArray.variant(children),
     ]);
   }
@@ -700,10 +769,6 @@ class DBusMenuObject extends DBusObject {
         await item.onClosed?.call();
         break;
       case 'clicked':
-        await emitSignal('com.canonical.dbusmenu', 'ItemActivationRequested', [
-          DBusInt32(_idsByItem[item] ?? -1),
-          DBusUint32(timestamp),
-        ]);
         await item.onClicked?.call();
         break;
     }

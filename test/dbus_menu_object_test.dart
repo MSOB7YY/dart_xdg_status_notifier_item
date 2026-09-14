@@ -92,6 +92,109 @@ void main() {
     expect(idErrors, isEmpty);
   });
 
+  test('DBusMenuObject GetGroupProperties returns requested items', () async {
+    final rootMenu = DBusMenuItem(
+      children: [
+        DBusMenuItem(label: 'Item 1', enabled: false), // Item 1
+        DBusMenuItem.separator(), // Item 2
+      ],
+    );
+
+    final menuObject = DBusMenuObject(DBusObjectPath('/MenuBar'), rootMenu);
+
+    final methodCall = DBusMethodCall(
+      sender: 'org.freedesktop.DBus',
+      interface: 'com.canonical.dbusmenu',
+      name: 'GetGroupProperties',
+      values: [
+        DBusArray.int32([1, 2, 5]),
+        DBusArray.string([]),
+      ],
+    );
+
+    final response = await menuObject.handleMethodCall(methodCall);
+
+    expect(response, isA<DBusMethodSuccessResponse>());
+    final values = (response as DBusMethodSuccessResponse).values;
+    expect(values.length, 1);
+    expect(values[0].signature.value, 'a(ia{sv})');
+    final items = values[0].asArray().map((e) => e.asStruct()).toList();
+    expect(items.map((e) => e[0].asInt32()), [1, 2]);
+    expect(items[0][1].asStringVariantDict(), {
+      'enabled': DBusBoolean(false),
+      'label': DBusString('Item 1'),
+    });
+    expect(items[1][1].asStringVariantDict(), {
+      'type': DBusString('separator'),
+      'visible': DBusBoolean(true),
+    });
+  });
+
+  test(
+    'DBusMenuObject GetGroupProperties returns all items filtered by names',
+    () async {
+      final rootMenu = DBusMenuItem(
+        children: [
+          DBusMenuItem(label: 'Item 1', enabled: false), // Item 1
+        ],
+      );
+
+      final menuObject = DBusMenuObject(DBusObjectPath('/MenuBar'), rootMenu);
+
+      final methodCall = DBusMethodCall(
+        sender: 'org.freedesktop.DBus',
+        interface: 'com.canonical.dbusmenu',
+        name: 'GetGroupProperties',
+        values: [
+          DBusArray.int32([]),
+          DBusArray.string(['label']),
+        ],
+      );
+
+      final response = await menuObject.handleMethodCall(methodCall);
+
+      final values = (response as DBusMethodSuccessResponse).values;
+      final items = values[0].asArray().map((e) => e.asStruct()).toList();
+      expect(items.map((e) => e[0].asInt32()), [0, 1]);
+      expect(items[0][1].asStringVariantDict(), isEmpty);
+      expect(items[1][1].asStringVariantDict(), {
+        'label': DBusString('Item 1'),
+      });
+    },
+  );
+
+  test('DBusMenuObject.update increases GetLayout revision', () async {
+    final rootMenu = DBusMenuItem(
+      children: [
+        DBusMenuItem(label: 'Item 1'), // Item 1
+      ],
+    );
+
+    final menuObject = DBusMenuObject(DBusObjectPath('/MenuBar'), rootMenu);
+
+    Future<int> getRevision() async {
+      final response = await menuObject.handleMethodCall(
+        DBusMethodCall(
+          sender: 'org.freedesktop.DBus',
+          interface: 'com.canonical.dbusmenu',
+          name: 'GetLayout',
+          values: [DBusInt32(0), DBusInt32(-1), DBusArray.string([])],
+        ),
+      );
+      return (response as DBusMethodSuccessResponse).values[0].asUint32();
+    }
+
+    final initialRevision = await getRevision();
+    await menuObject.update(
+      DBusMenuItem(
+        children: [
+          DBusMenuItem(label: 'Item 1 updated'),
+        ],
+      ),
+    );
+    expect(await getRevision(), greaterThan(initialRevision));
+  });
+
   test(
     'DBusMenuObject.update throws ArgumentError if children count changes',
     () async {

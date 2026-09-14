@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1
+
+* **libdbusmenu hosts:** Implemented `GetGroupProperties`, without it menus rendered empty on Cinnamon (`xapp-sn-watcher`), XFCE and MATE.
+* **Layout revision:** `GetLayout` and `LayoutUpdated` now report an increasing revision, so hosts re-fetch updated layouts.
+* **Property filtering:** `GetLayout` and `GetGroupProperties` respect the requested `propertyNames`.
+* **Spec fix:** Clicking an item no longer emits `ItemActivationRequested`, which asks hosts to open the menu.
+
 ## 1.1.0
 
 * **Enhanced Developer Experience:** Updated `README.md` with more comprehensive examples to help new developers integrate the package more easily.

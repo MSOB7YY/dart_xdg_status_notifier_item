@@ -1,5 +1,5 @@
 name: dart_xdg_status_notifier_item
-version: 1.1.0
+version: 1.1.1
 
 description:
   Allows status notifications (i.e. system tray) on Linux desktops.
