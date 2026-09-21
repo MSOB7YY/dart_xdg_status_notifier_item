@@ -130,17 +130,22 @@ class DBusMenuObject extends DBusObject {
     }
   }
 
-  /// Export an updated [menu]. This must have the same number and layout of items as the previous menu.
+  /// Export an updated [menu].
+  ///
+  /// A menu that kept its shape is updated in place through ItemsPropertiesUpdated, otherwise
+  /// only LayoutUpdated is emitted and hosts re-read the whole layout.
   Future<void> update(DBusMenuItem menu) async {
     // Calculate what has changed.
     var updatedProperties = <DBusValue>[];
     var removedProperties = <DBusValue>[];
-    _makeMenuItemPropertiesUpdated(
-      this.menu,
-      menu,
-      updatedProperties,
-      removedProperties,
-    );
+    if (_hasSameShape(this.menu, menu)) {
+      _makeMenuItemPropertiesUpdated(
+        this.menu,
+        menu,
+        updatedProperties,
+        removedProperties,
+      );
+    }
 
     // Replace old menu.
     _items.clear();
@@ -148,13 +153,23 @@ class DBusMenuObject extends DBusObject {
     this.menu = menu;
     _registerIds(menu);
 
-    await emitSignal('com.canonical.dbusmenu', 'ItemsPropertiesUpdated', [
-      DBusArray(DBusSignature('(ia{sv})'), updatedProperties),
-      DBusArray(DBusSignature('(ias)'), removedProperties),
-    ]);
+    if (updatedProperties.isNotEmpty || removedProperties.isNotEmpty) {
+      await emitSignal('com.canonical.dbusmenu', 'ItemsPropertiesUpdated', [
+        DBusArray(DBusSignature('(ia{sv})'), updatedProperties),
+        DBusArray(DBusSignature('(ias)'), removedProperties),
+      ]);
+    }
 
     // Emit LayoutUpdated since the underlying tree structure might have fundamentally changed.
     await _emitLayoutUpdated(0);
+  }
+
+  static bool _hasSameShape(DBusMenuItem a, DBusMenuItem b) {
+    if (a.children.length != b.children.length) return false;
+    for (var i = 0; i < a.children.length; i++) {
+      if (!_hasSameShape(a.children[i], b.children[i])) return false;
+    }
+    return true;
   }
 
   Future<void> _emitLayoutUpdated(int parentId) async {
@@ -193,11 +208,6 @@ class DBusMenuObject extends DBusObject {
       );
     }
 
-    if (originalItem.children.length != newItem.children.length) {
-      throw ArgumentError(
-        'Updated menu must have the same number of items as the previous menu.',
-      );
-    }
     for (var i = 0; i < originalItem.children.length; i++) {
       _makeMenuItemPropertiesUpdated(
         originalItem.children[i],

@@ -195,33 +195,44 @@ void main() {
     expect(await getRevision(), greaterThan(initialRevision));
   });
 
-  test(
-    'DBusMenuObject.update throws ArgumentError if children count changes',
-    () async {
-      final rootMenu = DBusMenuItem(
-        children: [
-          DBusMenuItem(label: 'Item 1'), // Item 1
-        ],
-      );
+  test('DBusMenuObject.update exports a menu whose children count changed', () async {
+    final rootMenu = DBusMenuItem(
+      children: [
+        DBusMenuItem(label: 'Item 1'), // Item 1
+      ],
+    );
 
-      final menuObject = DBusMenuObject(DBusObjectPath('/MenuBar'), rootMenu);
-      final updatedMenu = DBusMenuItem(
+    final menuObject = DBusMenuObject(DBusObjectPath('/MenuBar'), rootMenu);
+
+    Future<DBusMethodSuccessResponse> getLayout() async {
+      final response = await menuObject.handleMethodCall(
+        DBusMethodCall(
+          sender: 'org.freedesktop.DBus',
+          interface: 'com.canonical.dbusmenu',
+          name: 'GetLayout',
+          values: [DBusInt32(0), DBusInt32(-1), DBusArray.string([])],
+        ),
+      );
+      return response as DBusMethodSuccessResponse;
+    }
+
+    final initialRevision = (await getLayout()).values[0].asUint32();
+
+    await menuObject.update(
+      DBusMenuItem(
         children: [
           DBusMenuItem(label: 'Item 1 updated'),
           DBusMenuItem(label: 'Item 2 added'),
         ],
-      );
+      ),
+    );
 
-      expect(
-        () => menuObject.update(updatedMenu),
-        throwsA(
-          isA<ArgumentError>().having(
-            (e) => e.message,
-            'message',
-            'Updated menu must have the same number of items as the previous menu.',
-          ),
-        ),
-      );
-    },
-  );
+    final layout = await getLayout();
+    expect(layout.values[0].asUint32(), greaterThan(initialRevision));
+
+    final children = layout.values[1].asStruct()[2].asArray().map((e) => e.asVariant().asStruct()).toList();
+    expect(children.length, 2);
+    expect(children[0][1].asStringVariantDict()['label'], DBusString('Item 1 updated'));
+    expect(children[1][1].asStringVariantDict()['label'], DBusString('Item 2 added'));
+  });
 }

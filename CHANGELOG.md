@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2
+
+* **Menu updates:** `DBusMenuObject.update` no longer throws when the new menu has a different shape, it exports it and lets hosts re-read the layout. Before, a single item appearing or disappearing left the menu frozen on its previous contents forever.
+
 ## 1.1.1
 
 * **libdbusmenu hosts:** Implemented `GetGroupProperties`, without it menus rendered empty on Cinnamon (`xapp-sn-watcher`), XFCE and MATE.
